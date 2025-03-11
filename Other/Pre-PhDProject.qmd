@@ -1,0 +1,136 @@
+---
+title: "Pre-PhD Project"
+format: docx
+editor: visual
+---
+#Clean the Data 
+## Load Libraries and Read MegaWestern Data
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(dplyr)
+
+org_mega_data <- read.csv("MegaWestern Communication Effectiveness copy.csv")
+```
+
+##Rename all of my Variables to make Sense
+```{r,eval: false}
+
+mega_data <- org_mega_data %>% 
+  rename(sales = X,
+         name = Q31, 
+         contact = Q30, 
+         role = Q1.1, 
+         email = Q2.2, 
+         email_time = Q2.3,
+         phone = Q2.4, 
+         phone_time = Q2.5, 
+         virtual_meeting = Q2.6, 
+         virtual_meeting_time = Q2.7, 
+         inperson_meeting = Q2.8, 
+         inperson_meeting_time = Q2.9, 
+         small_social = Q2.10, 
+         small_social_time = Q2.11, 
+         large_social = Q2.12, 
+         large_social_time = Q2.13, 
+         formal_meeting = Q2.14, 
+         formal_meeting_time = Q2.15, 
+         communication_open = Q2.16, 
+         no_training = Q3.2, 
+         hands_training = Q3.3, 
+         distributor_training = Q3.4, 
+         contractor_training = Q3.5, 
+         large_training = Q3.6, 
+         small_training = Q3.7, 
+         virtual_training = Q3.8, 
+         training_open = Q3.9, 
+         overall_open = Q29)
+```
+##Join Theme Extraction Data 
+```{r}
+open_ended <- read_csv("OpenEndedAnswersToAdd.csv")
+open_ended <- open_ended %>% 
+  rename(name = "Name")
+joined_mega_data <- mega_data %>% 
+  left_join(open_ended, by = "name")
+```
+##Get rid of rows with empty sales data 
+##Make survey completion percentage variable
+```{r}
+# Identify columns to check (assuming survey questions start from a specific column)
+start_col <- 2  # Adjust if needed; start from where actual survey questions begin
+
+# Create a vector to store completion percentages
+completion_rate <- numeric(nrow(joined_mega_data))
+
+# Loop through each row to calculate completion percentage
+for (i in 1:nrow(joined_mega_data)) {
+  responses <- joined_mega_data[i, start_col:ncol(joined_mega_data)]  # Get all survey response columns
+  
+  total_questions <- ncol(responses)  # Total number of survey questions
+  
+  # Count all non-missing, non-empty responses (whether text, categorical, or numeric)
+  answered_questions <- sum(!is.na(responses) & responses != "")
+  
+  # Compute completion percentage
+  completion_rate[i] <- (answered_questions / total_questions) * 100  
+}
+
+# Add completion rate to dataframe
+joined_mega_data$completion_rate <- completion_rate
+```
+##Make survey completion variable 
+```{r}
+# Create a vector to store "Complete" / "Incomplete" status
+completion_status <- character(nrow(joined_mega_data))
+
+# Loop through each row to check for missing values
+for (i in 1:nrow(joined_mega_data)) {
+  responses <- joined_mega_data[i, start_col:ncol(joined_mega_data)]  # Select only survey response columns
+  
+  # If any response is missing or empty, mark as "Incomplete", otherwise "Complete"
+  if (any(is.na(responses) | responses == "")) {
+    completion_status[i] <- "Incomplete"
+  } else {
+    completion_status[i] <- "Complete"
+  }
+}
+
+# Add completion status to dataframe
+joined_mega_data$completion_status <- completion_status
+```
+
+##Impute Missing Values based on the mean 
+```{r}
+set.seed(22)
+# Convert blank ("") values to NA
+joined_mega_data <- joined_mega_data %>%
+  mutate(across(where(is.character), ~ na_if(., "")))
+
+# Impute missing values for numeric columns
+imputed_data <- joined_mega_data %>%
+  select(-sales, -name, -contact, -role, -email_time, -phone_time, -virtual_meeting_time, 
+         -inperson_meeting_time, -small_social_time, -large_social_time, 
+         -formal_meeting_time, -communication_open, -training_open, -overall_open, 
+         -Question1_Theme1, -Question1_Theme2, -Question1_Theme3, 
+         -Question2_Theme1, -Question2_Theme2, -Question2_Theme3, 
+         -Question3_Theme1, -Question3_Theme2, -Question3_Theme3, 
+         -completion_rate, -completion_status) %>%
+  mutate(across(where(is.numeric), ~ replace_na(.,
+    {
+      col_mean <- mean(., na.rm = TRUE)
+      col_sd <- sd(., na.rm = TRUE)
+      
+      # If SD is NA or 0, set SD to 1
+      if (is.na(col_sd) | col_sd == 0) col_sd <- 1
+      
+      # Generate a random normal value within valid range
+      round(rnorm(n = sum(is.na(.)), mean = col_mean, sd = col_sd))
+    }
+  ))) %>%
+  mutate(across(where(is.numeric), ~ pmax(pmin(., 5), 1)))  # Keep values between 1-5
+
+# Check if there are still missing values
+colSums(is.na(imputed_data))
+```
+
