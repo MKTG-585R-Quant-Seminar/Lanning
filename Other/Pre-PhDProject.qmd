@@ -55,17 +55,24 @@ joined_mega_data <- mega_data %>%
   left_join(open_ended, by = "name")
 ```
 ##Get rid of rows with empty sales data 
+```{r}
+
+filtered_mega_data <- joined_mega_data %>%
+  mutate(across(sales, ~ na_if(., ""))) %>%  # Convert "" to NA
+  filter(!is.na(sales))  # Drop rows where "sales" is NA
+```
+
 ##Make survey completion percentage variable
 ```{r}
 # Identify columns to check (assuming survey questions start from a specific column)
 start_col <- 2  # Adjust if needed; start from where actual survey questions begin
 
 # Create a vector to store completion percentages
-completion_rate <- numeric(nrow(joined_mega_data))
+completion_rate <- numeric(nrow(filtered_mega_data))
 
 # Loop through each row to calculate completion percentage
-for (i in 1:nrow(joined_mega_data)) {
-  responses <- joined_mega_data[i, start_col:ncol(joined_mega_data)]  # Get all survey response columns
+for (i in 1:nrow(filtered_mega_data)) {
+  responses <- filtered_mega_data[i, start_col:ncol(filtered_mega_data)]  # Get all survey response columns
   
   total_questions <- ncol(responses)  # Total number of survey questions
   
@@ -77,16 +84,16 @@ for (i in 1:nrow(joined_mega_data)) {
 }
 
 # Add completion rate to dataframe
-joined_mega_data$completion_rate <- completion_rate
+filtered_mega_data$completion_rate <- completion_rate
 ```
 ##Make survey completion variable 
 ```{r}
 # Create a vector to store "Complete" / "Incomplete" status
-completion_status <- character(nrow(joined_mega_data))
+completion_status <- character(nrow(filtered_mega_data))
 
 # Loop through each row to check for missing values
-for (i in 1:nrow(joined_mega_data)) {
-  responses <- joined_mega_data[i, start_col:ncol(joined_mega_data)]  # Select only survey response columns
+for (i in 1:nrow(filtered_mega_data)) {
+  responses <- filtered_mega_data[i, start_col:ncol(filtered_mega_data)]  # Select only survey response columns
   
   # If any response is missing or empty, mark as "Incomplete", otherwise "Complete"
   if (any(is.na(responses) | responses == "")) {
@@ -97,40 +104,104 @@ for (i in 1:nrow(joined_mega_data)) {
 }
 
 # Add completion status to dataframe
-joined_mega_data$completion_status <- completion_status
+filtered_mega_data$completion_status <- completion_status
 ```
 
-##Impute Missing Values based on the mean 
+##Impute Missing Ranking Values based on the mean 
 ```{r}
 set.seed(22)
-# Convert blank ("") values to NA
-joined_mega_data <- joined_mega_data %>%
-  mutate(across(where(is.character), ~ na_if(., "")))
 
-# Impute missing values for numeric columns
-imputed_data <- joined_mega_data %>%
-  select(-sales, -name, -contact, -role, -email_time, -phone_time, -virtual_meeting_time, 
-         -inperson_meeting_time, -small_social_time, -large_social_time, 
-         -formal_meeting_time, -communication_open, -training_open, -overall_open, 
-         -Question1_Theme1, -Question1_Theme2, -Question1_Theme3, 
-         -Question2_Theme1, -Question2_Theme2, -Question2_Theme3, 
-         -Question3_Theme1, -Question3_Theme2, -Question3_Theme3, 
-         -completion_rate, -completion_status) %>%
-  mutate(across(where(is.numeric), ~ replace_na(.,
-    {
+imputed_numeric_data <- filtered_mega_data %>%
+  select(-sales, -name, -contact, -role, -email_time, -phone_time, 
+         -virtual_meeting_time, -inperson_meeting_time, -small_social_time, 
+         -large_social_time, -formal_meeting_time, -communication_open, 
+         -training_open, -overall_open, -Question1_Theme1, -Question1_Theme2, 
+         -Question1_Theme3, -Question2_Theme1, -Question2_Theme2, 
+         -Question2_Theme3, -Question3_Theme1, -Question3_Theme2, 
+         -Question3_Theme3, -completion_rate, -completion_status) %>%
+  mutate(across(everything(), as.numeric)) %>% 
+  mutate(across(
+    where(is.numeric),
+    ~ {
+      # Calculate distribution parameters
       col_mean <- mean(., na.rm = TRUE)
       col_sd <- sd(., na.rm = TRUE)
       
-      # If SD is NA or 0, set SD to 1
-      if (is.na(col_sd) | col_sd == 0) col_sd <- 1
+      # Handle edge cases
+      if (is.na(col_mean)) col_mean <- 0  # For all-NA columns
+      if (is.na(col_sd) || col_sd == 0) col_sd <- 0.1  # Prevent SD=0 errors
       
-      # Generate a random normal value within valid range
-      round(rnorm(n = sum(is.na(.)), mean = col_mean, sd = col_sd))
+      # Replace NAs with normally distributed values
+      if_else(
+        is.na(.),
+        rnorm(n = length(.), mean = col_mean, sd = col_sd) %>%
+          pmax(1) %>% pmin(5) %>% round(),
+        .
+      )
     }
-  ))) %>%
-  mutate(across(where(is.numeric), ~ pmax(pmin(., 5), 1)))  # Keep values between 1-5
+  ))
 
-# Check if there are still missing values
-colSums(is.na(imputed_data))
+```
+##Impute Missing Categorical Values based on the mean 
+```{r}
+set.seed(22)
+glimpse(filtered_mega_data)
+imputed_ordered_data <- filtered_mega_data %>%
+  select(-sales, -name, -contact, -role, -email, -phone, -virtual_meeting, -inperson_meeting, -small_social, -large_social, -formal_meeting, -virtual_training, -hands_training, -no_training, -distributor_training, -contractor_training, -large_training, -small_training, -communication_open, 
+         -training_open, -overall_open, -Question1_Theme1, -Question1_Theme2, 
+         -Question1_Theme3, -Question2_Theme1, -Question2_Theme2, 
+         -Question2_Theme3, -Question3_Theme1, -Question3_Theme2, 
+         -Question3_Theme3, -completion_rate, -completion_status) %>%
+  mutate(across(
+    where(is.character),
+    ~ ordered(., levels = c("Never","Daily", "Weekly", "Monthly", "Quarterly", "Yearly"))  # Define order explicitly
+  )) 
+
+set.seed(22)
+
+
+impute_ordered <- function(x) {
+  levels <- levels(x)
+  scores <- as.numeric(x)
+  na_mask <- is.na(scores)
+  if (sum(na_mask) == 0) return(x)
+  
+  obs_scores <- scores[!na_mask]
+  col_mean <- mean(obs_scores, na.rm = TRUE)
+  col_sd <- sd(obs_scores, na.rm = TRUE)
+  
+  if (is.na(col_mean)) col_mean <- median(seq_along(levels))
+  if (is.na(col_sd) || col_sd == 0) col_sd <- 0.5
+  
+  imputed_scores <- round(rnorm(sum(na_mask), mean = col_mean, sd = col_sd)) %>%
+    pmax(1) %>% pmin(length(levels))
+  
+  x[na_mask] <- levels[imputed_scores]
+  
+  return(x)
+}
+
+
+for (col in names(imputed_ordered_data)) {
+  if (is.ordered(imputed_ordered_data[[col]])) {
+    imputed_ordered_data[[col]] <- impute_ordered(imputed_ordered_data[[col]])
+    message("Imputed column: ", col)
+  }
+}
+
+
+
+```
+#Join Imputed Variables with all other Variables 
+```{r}
+more_filtered_mega_data <- filtered_mega_data %>% 
+  select(sales, name, contact, role, training_open, communication_open, overall_open, Question1_Theme1, Question1_Theme2, Question1_Theme3, Question2_Theme1, Question2_Theme2, Question2_Theme3, Question3_Theme1, Question3_Theme2, Question3_Theme3)
+all_imputed_data <- cbind(more_filtered_mega_data, imputed_numeric_data, imputed_ordered_data)
 ```
 
+#Now We can finally start modeling??
+#Regularized regression try 
+#Leave one out cross validation approach
+#Regression model with just the numeric data 
+#Regression model with the ordered and numeric data 
+#Regression model with the theme extraction data 
