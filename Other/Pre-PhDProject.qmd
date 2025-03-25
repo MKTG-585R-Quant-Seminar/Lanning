@@ -3,8 +3,9 @@ title: "Pre-PhD Project"
 format: docx
 editor: visual
 ---
-#Clean the Data 
-## Load Libraries and Read MegaWestern Data
+
+#Clean the Data \## Load Libraries and Read MegaWestern Data
+
 ```{r}
 library(tidyverse)
 library(tidymodels)
@@ -14,6 +15,7 @@ org_mega_data <- read.csv("MegaWestern Communication Effectiveness copy.csv")
 ```
 
 ##Rename all of my Variables to make Sense
+
 ```{r,eval: false}
 
 mega_data <- org_mega_data %>% 
@@ -46,7 +48,9 @@ mega_data <- org_mega_data %>%
          training_open = Q3.9, 
          overall_open = Q29)
 ```
-##Join Theme Extraction Data 
+
+##Join Theme Extraction Data
+
 ```{r}
 open_ended <- read_csv("OpenEndedAnswersToAdd.csv")
 open_ended <- open_ended %>% 
@@ -54,7 +58,9 @@ open_ended <- open_ended %>%
 joined_mega_data <- mega_data %>% 
   left_join(open_ended, by = "name")
 ```
-##Get rid of rows with empty sales data 
+
+##Get rid of rows with empty sales data
+
 ```{r}
 
 filtered_mega_data <- joined_mega_data %>%
@@ -63,6 +69,7 @@ filtered_mega_data <- joined_mega_data %>%
 ```
 
 ##Make survey completion percentage variable
+
 ```{r}
 # Identify columns to check (assuming survey questions start from a specific column)
 start_col <- 2  # Adjust if needed; start from where actual survey questions begin
@@ -86,7 +93,9 @@ for (i in 1:nrow(filtered_mega_data)) {
 # Add completion rate to dataframe
 filtered_mega_data$completion_rate <- completion_rate
 ```
-##Make survey completion variable 
+
+##Make survey completion variable
+
 ```{r}
 # Create a vector to store "Complete" / "Incomplete" status
 completion_status <- character(nrow(filtered_mega_data))
@@ -107,7 +116,8 @@ for (i in 1:nrow(filtered_mega_data)) {
 filtered_mega_data$completion_status <- completion_status
 ```
 
-##Impute Missing Ranking Values based on the mean 
+##Impute Missing Ranking Values based on the mean
+
 ```{r}
 set.seed(22)
 
@@ -142,7 +152,9 @@ imputed_numeric_data <- filtered_mega_data %>%
   ))
 
 ```
-##Impute Missing Categorical Values based on the mean 
+
+##Impute Missing Categorical Values based on the mean
+
 ```{r}
 set.seed(22)
 glimpse(filtered_mega_data)
@@ -192,7 +204,9 @@ for (col in names(imputed_ordered_data)) {
 
 
 ```
-#Join Imputed Variables with all other Variables 
+
+#Join Imputed Variables with all other Variables
+
 ```{r}
 more_filtered_mega_data <- filtered_mega_data %>% 
   select(sales, name, contact, role, training_open, communication_open, overall_open, Question1_Theme1, Question1_Theme2, Question1_Theme3, Question2_Theme1, Question2_Theme2, Question2_Theme3, Question3_Theme1, Question3_Theme2, Question3_Theme3)
@@ -200,8 +214,353 @@ all_imputed_data <- cbind(more_filtered_mega_data, imputed_numeric_data, imputed
 ```
 
 #Now We can finally start modeling??
-#Regularized regression try 
-#Leave one out cross validation approach
-#Regression model with just the numeric data 
-#Regression model with the ordered and numeric data 
-#Regression model with the theme extraction data 
+
+#Regression model with just the numeric data
+
+```{r}
+all_imputed_data <- all_imputed_data %>%
+  mutate(sales = as.numeric(gsub(",", "", sales)))
+(model_numeric_comm <- linear_reg() |> 
+  set_engine("lm") |> 
+  fit(sales ~ email + phone + virtual_meeting + inperson_meeting + small_social + large_social + formal_meeting , data = all_imputed_data))
+
+
+
+(model_numeric_all <- linear_reg() |> 
+  set_engine("lm") |> 
+  fit(sales ~ email + phone + virtual_meeting + inperson_meeting + small_social + large_social + formal_meeting + no_training + hands_training + large_training + small_training + virtual_training + distributor_training + contractor_training, data = all_imputed_data))
+
+tidy(model_numeric_all)
+
+glance(model_numeric_all)
+
+natheme_imputed <- all_imputed_data %>% 
+  drop_na
+(model_themes <- linear_reg() |> 
+  set_engine("lm") |> 
+  fit(sales ~ Question1_Theme1 + Question1_Theme2 + Question1_Theme3 + Question2_Theme1 + Question2_Theme2 + Question2_Theme3 + Question3_Theme1 + Question3_Theme2 + Question3_Theme3, data = natheme_imputed))
+
+tidy(model_themes)
+glance(model_themes)
+
+(model_numeric_themes <- linear_reg() |> 
+  set_engine("lm") |> 
+  fit(sales ~ email + phone + virtual_meeting + inperson_meeting + small_social + large_social + formal_meeting + no_training + hands_training + large_training + small_training + virtual_training + distributor_training + contractor_training +Question1_Theme1 + Question1_Theme2 + Question1_Theme3 + Question2_Theme1 + Question2_Theme2 + Question2_Theme3 + Question3_Theme1 + Question3_Theme2 + Question3_Theme3, data = natheme_imputed))
+
+tidy(model_numeric_themes)
+```
+
+#turn it in to a csv to get chat help
+
+```{r}
+write.csv(all_imputed_data, "all_imputed_data.csv", row.names = FALSE)
+```
+
+#Regression model with the ordered and numeric data #Regression model with the theme extraction data #Regularized regression try #Leave one out cross validation approach
+
+#Regularized Regression Attempt
+
+```{r}
+#install new packages 
+library(glmnet)
+library(caret)
+
+# Remove non-numeric columns (assuming 'sales' is our target variable)
+numeric_cols <- sapply(all_imputed_data, is.numeric)
+X <- all_imputed_data[, numeric_cols & names(all_imputed_data) != "sales"]
+y <- all_imputed_data$sales
+
+set.seed(123)  # for reproducibility
+train_index <- createDataPartition(y, p = 0.8, list = FALSE)
+X_train <- X[train_index, ]
+X_test <- X[-train_index, ]
+y_train <- y[train_index]
+y_test <- y[-train_index]
+
+X_train_matrix <- as.matrix(X_train)
+X_test_matrix <- as.matrix(X_test)
+
+# Perform cross-validation to find the best lambda
+cv_model <- cv.glmnet(X_train_matrix, y_train, alpha = 0.5)
+
+# Find the best lambda
+best_lambda <- cv_model$lambda.min
+
+# Fit the final model
+final_model <- glmnet(X_train_matrix, y_train, alpha = 0.5, lambda = best_lambda)
+
+# Make predictions on the test set
+predictions <- predict(final_model, s = best_lambda, newx = X_test_matrix)
+
+# Calculate RMSE
+rmse <- sqrt(mean((y_test - predictions)^2))
+print(paste("RMSE:", rmse))
+
+# Calculate R-squared
+rsq <- 1 - sum((y_test - predictions)^2) / sum((y_test - mean(y_test))^2)
+print(paste("R-squared:", rsq))
+
+# Get the coefficients
+coef_matrix <- coef(final_model, s = best_lambda)
+coef_df <- data.frame(
+  feature = rownames(coef_matrix),
+  coefficient = as.vector(coef_matrix)
+)
+coef_df <- coef_df[order(abs(coef_df$coefficient), decreasing = TRUE), ]
+print(coef_df)
+
+```
+
+#Principal Components Analysis Find common themes across questions Cluster customers based on principal components - relationship management strategies
+
+```{r}
+pc_numeric <- prcomp(X)
+write.csv(pc_numeric$sd, "PCA_Numeric_Sd.csv", row.names = TRUE)
+fourpc_numeric <- pc_numeric$x[,1:4]
+
+```
+
+PC1 = overall communication involvement preference 
+PC2= work life vs. social life 
+PC3= hatred of technology do PC analysis with just the themes
+ChatGPT analysis 
+The Hidden Structures of Business Interactions: A Story of Four Principal Components
+In a bustling corporate world, different modes of communication and training intertwine, shaping the way organizations function. But beneath this complexity, four fundamental forces—Principal Components (PCs)—emerge, each representing an unseen pattern governing interactions.
+
+PC1: The Engagement Spectrum
+PC1 is the dominant force in shaping business interactions, capturing the highest variance. It signifies the engagement intensity of communication and training. High negative loadings on variables like formal meetings (-0.44), contractor training (-0.43), large social events (-0.36), and small social events (-0.32) suggest that this component opposes highly structured and large-scale engagements. Meanwhile, smaller magnitudes for email (-0.09) and no training (-0.09) indicate these are less influential in this dynamic.
+
+Interpretation: PC1 represents a contrast between structured social and training events versus more casual, low-engagement forms of communication. Organizations that rely more on formal meetings and contractor training are positioned differently from those favoring informal and individual-level engagement.
+
+PC2: The Digital vs. Traditional Divide
+PC2 captures a technological shift in communication and learning styles. Strong positive loadings appear for virtual meetings (0.61), email (0.49), and in-person meetings (0.33), whereas small training (-0.14), distributor training (-0.11), and large training (-0.20) pull in the opposite direction.
+
+Interpretation: PC2 represents the contrast between digital-first engagement and traditional training methods. Companies leaning into digital tools like email and virtual meetings stand apart from those favoring in-depth distributor or hands-on training. This suggests a divide between tech-heavy and legacy-driven corporate environments.
+
+PC3: The Informal vs. Structured Communication Mode
+PC3 tells the story of how structured or unstructured communication methods shape interactions. Strong positive loadings on phone (0.62), in-person meetings (0.44), and hands-on training (0.17) suggest that this component favors direct, personal communication. Conversely, negative loadings on virtual meetings (-0.31) and virtual training (-0.30) suggest a movement away from impersonal, digital interactions.
+
+Interpretation: PC3 represents the contrast between hands-on, high-touch interactions and remote, impersonal communication. Teams with strong in-person communication habits see things differently than those operating largely in a digital environment.
+
+PC4: The Adaptability Factor
+PC4 highlights how adaptable or rigid an organization's communication and training strategies are. High positive loadings on virtual training (0.31), phone (0.39), and large social events (0.36) contrast with negative values for contractor training (-0.55), large training (-0.29), and in-person meetings (-0.21).
+
+Interpretation: PC4 reflects the tension between adaptability and rigid structures. Organizations embracing virtual training and dynamic communication channels tend to be more flexible, whereas those relying on contractor training and large-scale formal training programs follow a more structured and less adaptable approach.
+
+Conclusion: A Map of Organizational Strategy
+Through this PCA, we uncover a hidden map of corporate communication and training styles.
+
+PC1: Measures engagement levels (formal vs. casual interactions).
+
+PC2: Separates tech-driven from traditional communication.
+
+PC3: Differentiates direct personal interactions from digital engagement.
+
+PC4: Captures adaptability in training and communication strategies.
+#PCA on theme variables 
+```{r}
+open_ended_dummy <- as.data.frame(lapply(open_ended, as.numeric)) %>% 
+  select(-name)
+pc_open <- prcomp(open_ended_dummy)
+write.csv(pc_open$rotation, "PCA_Open.csv", row.names = TRUE)
+```
+ChatGPT Analysis 
+The Hidden Themes in Survey Responses: A Story of Principal Components
+In the world of research and data analysis, survey responses often contain hidden structures—patterns that reveal how different themes are interconnected. Through Principal Component Analysis (PCA), we uncover the latent forces shaping how respondents answered different questions across various themes.
+
+PC1: The Dominant Theme Factor
+PC1 is the strongest underlying force in this dataset, capturing the most variance. This component has high positive loadings for Question2_Theme1 (0.64), Question3_Theme1 (0.47), and Question3_Theme3 (0.36), as well as a strong contribution from Question1_Theme3 (0.34).
+
+Interpretation: PC1 represents a general agreement or alignment across multiple themes, particularly in Question 2 and Question 3. Respondents who score highly on this component tend to provide consistent responses across themes, suggesting an overarching factor influencing their perceptions.
+
+PC2: The Divergence of Question 1
+PC2 reveals a striking contrast, as Question1_Theme1 (-0.56) and Question2_Theme1 (-0.41) load negatively, while Question1_Theme2 (0.45) and Question3_Theme1 (0.38) load positively.
+
+Interpretation: PC2 distinguishes between different perspectives within Question 1—respondents who resonate with Theme1 in Question 1 are likely to disagree with other themes in Question 1, whereas Theme2 responses follow a different pattern. This could indicate a split in opinion regarding the framing of Question 1’s themes.
+
+PC3: The Thematic Opposition Factor
+PC3 brings out a contrast between structured and unstructured thinking. Question1_Theme1 (-0.60), Question2_Theme1 (0.48), and Question3_Theme3 (-0.55) show strong and opposing influences.
+
+Interpretation: PC3 represents a conflict between two perspectives—those who align with Question2_Theme1 but strongly diverge from structured responses in Question1_Theme1 and Question3_Theme3. This suggests that some respondents favor a certain approach or concept but reject a specific set of related ideas.
+
+PC4: The Conceptual Clarity Component
+PC4 highlights the difference in clarity and alignment between responses. Positive loadings on Question2_Theme1 (0.36) and Question3_Theme3 (0.48) contrast with strong negative loadings on Question3_Theme1 (-0.50).
+
+Interpretation: PC4 measures how consistently respondents align with structured themes—some respondents provide clear, aligned responses across Question2 and Question3, while others show divergence, particularly in how they respond to Question3’s first theme.
+
+PC5: The Nuanced Preference Factor
+PC5 is subtler but reveals specific response preferences. Strong positive loadings appear for Question1_Theme2 (0.62) and Question1_Theme3 (0.52), while Question3_Theme1 (-0.45) pulls in the opposite direction.
+
+Interpretation: This component captures a preference for nuanced responses in Question1, distinguishing respondents who agree with Theme2 and Theme3 in Question1 but do not align with Theme1 in Question3. It suggests a subtle difference in how individuals perceive related topics within Question1.
+
+Conclusion: A Map of Thematic Thinking
+This PCA reveals patterns of alignment and divergence in survey responses:
+
+PC1: Measures broad alignment across multiple questions.
+
+PC2: Highlights divergence within Question1’s themes.
+
+PC3: Opposes structured vs. unstructured thinking.
+
+PC4: Captures conceptual clarity vs. inconsistency.
+
+PC5: Distinguishes nuanced preferences in Question1.
+
+#K-means clustering
+
+```{r}
+
+
+# Perform k-means clustering with k=3 (adjust as needed)
+set.seed(123)
+kmeans_result <- kmeans(fourpc_numeric, centers = 4, nstart = 25)
+
+# Add cluster assignments to the data frame
+pca_df <- as.data.frame(fourpc_numeric)
+pca_df$Cluster <- as.factor(kmeans_result$cluster)
+
+# Plot the first two principal components with clusters
+ggplot(pca_df, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point(size = 3) +
+  labs(title = "K-Means Clustering on PCA Components",
+       x = "Principal Component 1",
+       y = "Principal Component 2") +
+  theme_minimal()
+
+```
+
+##Silhouette Coefficient to determine
+
+```{r}
+library(cluster)
+library(factoextra)
+# Ensure fourpc_numeric is numeric
+fourpc_numeric <- as.data.frame(fourpc_numeric)  # Convert to dataframe if needed
+
+# Function to compute the average silhouette width for different k values
+compute_silhouette <- function(k) {
+  kmeans_result <- kmeans(fourpc_numeric, centers = k, nstart = 25)
+  silhouette_score <- silhouette(kmeans_result$cluster, dist(fourpc_numeric))
+  mean(silhouette_score[, 3])  # Extract the average silhouette coefficient
+}
+
+# Evaluate silhouette score for different numbers of clusters (k = 2 to 10)
+k_values <- 2:10
+silhouette_scores <- sapply(k_values, compute_silhouette)
+
+# Plot silhouette scores
+silhouette_df <- data.frame(k_values, silhouette_scores)
+ggplot(silhouette_df, aes(x = k_values, y = silhouette_scores)) +
+  geom_line() + geom_point(size = 3) +
+  labs(title = "Silhouette Score for Different k Values",
+       x = "Number of Clusters (k)",
+       y = "Average Silhouette Score") +
+  theme_minimal()
+
+# Find optimal k (highest silhouette score)
+optimal_k <- k_values[which.max(silhouette_scores)]
+print(paste("Optimal number of clusters:", optimal_k))
+
+
+# Plot clusters on the first two PCs
+ggplot(fourpc_numeric, aes(x = PC1, y = PC2, color = Cluster)) +
+  geom_point(size = 3) +
+  labs(title = paste("K-Means Clustering with k =", optimal_k),
+       x = "Principal Component 1",
+       y = "Principal Component 2") +
+  theme_minimal()
+# Plot clusters on the last two PCs
+ggplot(fourpc_numeric, aes(x = PC3, y = PC4, color = Cluster)) +
+  geom_point(size = 3) +
+  labs(title = paste("K-Means Clustering with k =", optimal_k),
+       x = "Principal Component 3",
+       y = "Principal Component 4") +
+  theme_minimal()
+```
+
+do k-means and then find the average of each cluster to figure out preferences for that segment of customers then add sales back to clustering create categorical variable for high,medium, low value customers (proportion of high value customers in each cluster - tailoring) make graphs of the PC and clustering k= 2, for loop for each value of k until a limit of clusters you want add to lit review on cluster analysis - silhouette score/coefficient, rand index - calinski-harabasz index (elbow method)
+##Find distance between clusters and within clusters
+```{r}
+
+# Convert to dataframe if fourpc_numeric is a matrix
+fourpc_numeric <- as.data.frame(fourpc_numeric)
+
+# Add cluster assignments to the PCA data
+fourpc_numeric$Cluster <- as.factor(final_kmeans$cluster)
+
+# Compute within-cluster distances
+within_distances <- sapply(1:optimal_k, function(k) {
+  cluster_points <- fourpc_numeric[fourpc_numeric$Cluster == k, -ncol(fourpc_numeric)] # Exclude cluster column
+  center <- final_kmeans$centers[k, ]
+  mean(sqrt(rowSums((cluster_points - center) ^ 2)))  # Euclidean distance
+})
+
+# Compute between-cluster distances (pairwise distances between cluster centers)
+center_matrix <- as.matrix(final_kmeans$centers)
+between_distances <- dist(center_matrix)  # Computes pairwise distances
+mean_between_distance <- mean(between_distances)
+
+# Create a data frame for visualization
+distance_data <- data.frame(
+  Category = c("Within Clusters", "Between Clusters"),
+  Mean_Distance = c(mean(within_distances), mean_between_distance)
+)
+
+# Plot using ggplot2
+ggplot(distance_data, aes(x = Category, y = Mean_Distance, fill = Category)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Mean Distances: Within vs. Between Clusters",
+       y = "Mean Distance",
+       x = "")
+
+```
+##Different Difference Visualization 
+```{r}
+# Load required library
+library(ggplot2)
+
+# Ensure the data is a dataframe
+fourpc_numeric <- as.data.frame(fourpc_numeric)
+
+# Compute within-cluster distances for each cluster
+within_distances_df <- data.frame(Cluster = factor(), Mean_Distance = numeric())
+
+for (k in 1:optimal_k) {
+  cluster_points <- fourpc_numeric[fourpc_numeric$Cluster == k, -ncol(fourpc_numeric)]  # Exclude cluster column
+  center <- final_kmeans$centers[k, ]
+  mean_distance <- mean(sqrt(rowSums((cluster_points - center) ^ 2)))  # Euclidean distance
+  
+  within_distances_df <- rbind(within_distances_df, data.frame(Cluster = factor(k), Mean_Distance = mean_distance))
+}
+
+# Compute between-cluster distances
+center_matrix <- as.matrix(final_kmeans$centers)
+between_distances <- as.matrix(dist(center_matrix))  # Compute pairwise distances
+between_distances_df <- data.frame(Cluster1 = factor(), Cluster2 = factor(), Distance = numeric())
+
+for (i in 1:(optimal_k - 1)) {
+  for (j in (i + 1):optimal_k) {
+    between_distances_df <- rbind(between_distances_df, data.frame(
+      Cluster1 = factor(i),
+      Cluster2 = factor(j),
+      Distance = between_distances[i, j]
+    ))
+  }
+}
+
+# Plot Within-Cluster Mean Distances
+ggplot(within_distances_df, aes(x = Cluster, y = Mean_Distance, fill = Cluster)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Mean Within-Cluster Distances", x = "Cluster", y = "Mean Distance")
+
+# Plot Between-Cluster Distances as a Heatmap
+ggplot(between_distances_df, aes(x = Cluster1, y = Cluster2, fill = Distance)) +
+  geom_tile() +
+  theme_minimal() +
+  labs(title = "Pairwise Between-Cluster Distances", x = "Cluster", y = "Cluster") +
+  scale_fill_gradient(low = "blue", high = "red")
+
+```
+
